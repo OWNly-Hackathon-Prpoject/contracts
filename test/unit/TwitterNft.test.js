@@ -1,34 +1,36 @@
 const { assert, expect } = require("chai")
 const { network, deployments, ethers } = require('hardhat')
 const { developmentChains } = require("../../helper-hardhat-config")
-const { storeImage, storeTokenUriMetadata } = require("../../utils/uploadToPinata")
-const pinataSDK = require("@pinata/sdk")
+const { storeNFT } = require("../../utils/uploadToNftStorage")
+/* const { storeImage, storeTokenUriMetadata } = require("../../utils/uploadToPinata") */
 const path = require("path")
 const fs = require("fs")
 
 !developmentChains.includes(network.name)
     ? describe.skip
     : describe("TwitterNft", function () {
-        let deployerTwitterNft
+        let contractOwnerTwitterNft
         let contentCreatorTwitterNft
         let followerTwitterNft
-        let deployer
+        let contractOwner
         let contentCreator
         let follower
         beforeEach(async () => {
             const accounts = await ethers.getSigners()
-            deployer = accounts[0]
+            contractOwner = accounts[0]
             contentCreator = accounts[1]
             follower = accounts[2]
             // Deploy all contracts tagged with phrase 'all'
             //await deployments.fixture(['all'])
             twitterNftFactory = await ethers.getContractFactory("TwitterNft")
-            deployerTwitterNft = await twitterNftFactory.deploy()
-            contentCreatorTwitterNft = deployerTwitterNft.connect(contentCreator)
-            followerTwitterNft = deployerTwitterNft.connect(follower)
+            contractOwnerTwitterNft = await twitterNftFactory.deploy()
+            contentCreatorTwitterNft = contractOwnerTwitterNft.connect(contentCreator)
+            followerTwitterNft = contractOwnerTwitterNft.connect(follower)
             initialBalance = ethers.utils.parseEther('0.01')
+            await contractOwnerTwitterNft.setGlobalMaximumAmount(150)
+            console.log(10)
             let tx = {
-                to: deployerTwitterNft.address,
+                to: contractOwnerTwitterNft.address,
                 // Convert currency unit from ether to wei
                 value: initialBalance
             }
@@ -37,7 +39,6 @@ const fs = require("fs")
             console.log(txObj)
             txObj = await follower.sendTransaction(tx)
             console.log(txObj)
-
         })
 
         describe("constructor", function () {
@@ -46,8 +47,8 @@ const fs = require("fs")
                     name: "OWNly Tweet NFT",
                     symbol: "OTT"
                 }
-                const tokenName = await deployerTwitterNft.name()
-                const tokenSymbol = await deployerTwitterNft.symbol()
+                const tokenName = await contractOwnerTwitterNft.name()
+                const tokenSymbol = await contractOwnerTwitterNft.symbol()
                 assert.equal(tokenName.toString(), expected.name)
                 assert.equal(tokenSymbol.toString(), expected.symbol)
             })
@@ -57,97 +58,100 @@ const fs = require("fs")
             it("deploys ERC721 parameters customized by the content creator once the deployFee is set", async () => {
                 //Arrange
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 1
+                const transferable = true
                 const transferLimit = 2
                 const tweetId = 2221
                 const mintFee = await ethers.utils.parseEther('0.001')
                 const maxMintableAmount = 10
 
                 //Act
-                await deployerTwitterNft.setDeployFee(+deployFee)
-                await contentCreatorTwitterNft.deployNftParams(tokenFeature,
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await contentCreatorTwitterNft.deployNftParams(transferable,
                     transferLimit,
                     tweetId,
                     +mintFee,
-                    maxMintableAmount
+                    maxMintableAmount,
                 ) //from: contentCreator,
                 await followerTwitterNft.mintToken(tweetId) //from: follower,
                 await followerTwitterNft.setTokenURI(0, "TestURI")
 
                 const receivedTweetId = await followerTwitterNft.getTweeIdByTokenId(0)
                 const receivedDeployFee = await followerTwitterNft.getDeployFee()
-                const receivedFeature = await followerTwitterNft.getFeatureOfToken(0)
+                const receivedTransferable = await followerTwitterNft.getTransferabilityOfToken(0)
                 const receivedTransferLimit = await followerTwitterNft.getTransferLimitOfToken(0)
                 const receivedMintFee = await followerTwitterNft.getMintFeeByTweetId(tweetId)
 
                 //Assert
                 assert.equal(tweetId.toString(), receivedTweetId.toString())
                 assert.equal(deployFee.toString(), receivedDeployFee.toString())
-                assert.equal(tokenFeature.toString(), receivedFeature.toString())
+                assert.equal(transferable.toString(), receivedTransferable.toString())
                 assert.equal(transferLimit.toString(), receivedTransferLimit.toString())
                 assert.equal(mintFee.toString(), receivedMintFee.toString())
 
             })
 
-            it("prevents from deployment with wrong feature value", async () => {
-                const tokenFeature = 4
-
-                await expect(contentCreatorTwitterNft.deployNftParams(
-                    tokenFeature,
-                    0,
-                    2,
-                    0,
-                    3
-                )).to.be.revertedWith("Wrong value, the range is 0,1,2")
-            })
-
             it("prevents from deployment with fewer ETH", async () => {
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 0
+                const transferable = false
 
-                await deployerTwitterNft.setDeployFee(+deployFee)
-                await expect(deployerTwitterNft.deployNftParams( // has no ETH in VAULT
-                    tokenFeature,
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await expect(contractOwnerTwitterNft.deployNftParams( // has no ETH in VAULT
+                    transferable,
                     0,
                     2,
                     0,
                     3
-                )).to.be.revertedWith("Need more ETH")
+                )).to.be.revertedWith("TwitterNft__NeedMoreETH()")
             })
 
             it("prevents from deployment of the Nft already deployed", async () => {
+                const transferable = false
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 0
-                await deployerTwitterNft.setDeployFee(+deployFee)
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
                 contentCreatorTwitterNft.deployNftParams(
-                    tokenFeature,
+                    transferable,
                     0,
                     2,
                     0,
                     3
                 )
                 await expect(contentCreatorTwitterNft.deployNftParams(
-                    tokenFeature,
+                    transferable,
                     0,
                     2,
                     0,
                     3
-                )).to.be.revertedWith("This tweet is already deployed")
+                )).to.be.revertedWith("TwitterNft__TweetAlreadyDeployed()")
+            })
+
+            it("prevents maxMintable to be more than maxGlobalMintable amount", async function () {
+                const maxGlobalMintable = 4;
+                const deployFee = await ethers.utils.parseEther("0.001")
+                await contractOwnerTwitterNft.setDeployFee(deployFee)
+                await contractOwnerTwitterNft.setGlobalMaximumAmount(maxGlobalMintable)
+                const tokenFeature = 2;
+                await expect(contentCreatorTwitterNft.deployNftParams(
+                    tokenFeature,
+                    0,
+                    2,
+                    0,
+                    10
+                )).to.be.revertedWith("TwitterNft__MaxMintableParamToHigh")
             })
         })
         describe("ERC721 transfers", function () {
             it("transfers token and increment counter", async () => {
                 //Arrange
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 1
+                const transferable = true
                 const transferLimit = 2
                 const tweetId = 2221
                 const mintFee = await ethers.utils.parseEther('0.001')
                 const maxMintableAmount = 10
 
                 //Act
-                await deployerTwitterNft.setDeployFee(+deployFee)
-                await contentCreatorTwitterNft.deployNftParams(tokenFeature,
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await contentCreatorTwitterNft.deployNftParams(transferable,
                     transferLimit,
                     tweetId,
                     +mintFee,
@@ -174,15 +178,15 @@ const fs = require("fs")
             it("not transfers token for non-transefable tokens", async () => {
                 //Arrange
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 0
+                const transferable = false
                 const transferLimit = 2
                 const tweetId = 2221
                 const mintFee = await ethers.utils.parseEther('0.001')
                 const maxMintableAmount = 10
 
                 //Act
-                await deployerTwitterNft.setDeployFee(+deployFee)
-                await contentCreatorTwitterNft.deployNftParams(tokenFeature,
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await contentCreatorTwitterNft.deployNftParams(transferable,
                     transferLimit,
                     tweetId,
                     +mintFee,
@@ -204,15 +208,15 @@ const fs = require("fs")
             it("transfers token up to the limit and then reverts transaction", async () => {
                 //Arrange
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 2
+                const transferable = 1
                 const transferLimit = 2
                 const tweetId = 2221
                 const mintFee = await ethers.utils.parseEther('0.001')
                 const maxMintableAmount = 10
 
                 //Act
-                await deployerTwitterNft.setDeployFee(+deployFee)
-                await contentCreatorTwitterNft.deployNftParams(tokenFeature,
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await contentCreatorTwitterNft.deployNftParams(transferable,
                     transferLimit,
                     tweetId,
                     +mintFee,
@@ -238,15 +242,15 @@ const fs = require("fs")
             it("mints token up to the limit and then reverts transaction", async () => {
                 //Arrange
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 2
+                const transferable = true
                 const transferLimit = 2
                 const tweetId = 2221
                 const mintFee = await ethers.utils.parseEther('0.001')
                 const maxMintableAmount = 2
 
                 //Act
-                await deployerTwitterNft.setDeployFee(+deployFee)
-                await contentCreatorTwitterNft.deployNftParams(tokenFeature,
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await contentCreatorTwitterNft.deployNftParams(transferable,
                     transferLimit,
                     tweetId,
                     +mintFee,
@@ -256,15 +260,38 @@ const fs = require("fs")
                 await followerTwitterNft.mintToken(tweetId)
                 const tokenIdsByTweetId = await followerTwitterNft.getTokenIdsByTweetId(tweetId)
                 assert.equal(tokenIdsByTweetId.length.toString(), maxMintableAmount.toString())
-                await expect(followerTwitterNft.mintToken(tweetId)).to.be.revertedWith("Max number of tokens to mint exceeded")
+                await expect(followerTwitterNft.mintToken(tweetId)).to.be.revertedWith("TwitterNft__MaxNumberOfTokensExceeded")
 
             })
         })
+
+        describe("withdrawal", function () {
+            let deployFee, tokenFeature, transferLimit, tweetId, mintFee
+            beforeEach(async () => {
+                deployFee = await ethers.utils.parseEther('0.001')
+                transferLimit = 2
+                transferable = true
+                tweetId = 2221
+                mintFee = await ethers.utils.parseEther('0.001')
+                maxMintableAmount = 2
+            })
+            it("allows only Owner to Withdraw", async function () {
+                await contractOwnerTwitterNft.setDeployFee(deployFee)
+                await contentCreatorTwitterNft.deployNftParams(
+                    transferable, transferLimit, tweetId, mintFee, maxMintableAmount
+                )
+                await followerTwitterNft.mintToken(tweetId)
+                await expect(followerTwitterNft.withdraw()).to.be.revertedWith("Ownable: caller is not the owner")
+            })
+        })
+
         describe("ERC721 URI", function () {
             it("mint NFT with proper token URI", async () => {
                 //Arrange
+                const NR_OF_LIKES = 32
+                const NR_OF_SHARES = 12
                 const deployFee = await ethers.utils.parseEther('0.001')
-                const tokenFeature = 2
+                const transferable = true
                 const transferLimit = 2
                 const tweetId = 2221
                 const mintFee = await ethers.utils.parseEther('0.001')
@@ -272,51 +299,102 @@ const fs = require("fs")
                 const fullImagesPath = path.resolve(imagesFilePath) // absolute path 
                 const files = fs.readdirSync(fullImagesPath)
                 const maxMintableAmount = 10
-                let metadata = {
-                    title: "",
-                    type: "",
-                    properties: {
-                        tweetId: "",
-                        contentCreator: "",
-                        image: "",
-                        timestamp: "",
-                        attributes: [
-                            {
-                                numberOfLikes: 0,
-                                numberOfShares: 0,
-                            }
-                        ]
-                    }
-                }
-                let response = await storeImage(fullImagesPath + "/" + files[0])
-                console.log("Response: %s", response)
+                const nftDescription = `Tweet deployed by ${contentCreator.address} and minted by ${follower.address}`
+                const url = "https://github.com/OWNly-Finance"
 
-                metadata.title = files[0].replace(".png", "")
-                metadata.tweetId = tweetId
-                metadata.contentCreator = `twitter user name`
-                metadata.image = `ipfs://${response.IpfsHash}`
-                metadata.timestamp = response.timestamp
-                const metadataUploadResponse = await storeTokenUriMetadata(metadata)
-                console.log("Upload response: %s", metadataUploadResponse)
-                const pinataTokenUri = `ipfs://${metadataUploadResponse.IpfsHash}`
+                /* NFT Storage */
+                const result = await storeNFT(
+                    fullImagesPath + "/" + files[0],
+                    tweetId,
+                    nftDescription,
+                    url,
+                    NR_OF_LIKES,
+                    NR_OF_SHARES)
+                console.log("Upload response: %s", result)
+                console.log(result.url)
+                const tokenUri = result.url
 
                 //Act
-                await deployerTwitterNft.setDeployFee(+deployFee)
-                await contentCreatorTwitterNft.deployNftParams(tokenFeature,
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await contentCreatorTwitterNft.deployNftParams(transferable,
                     transferLimit,
                     tweetId,
                     +mintFee,
                     maxMintableAmount
                 )
-                console.log(metadata)
-                console.log(JSON.stringify(metadata))
+                // console.log(metadata)
+                // console.log(JSON.stringify(metadata))
                 await followerTwitterNft.mintToken(tweetId)
-                await followerTwitterNft.setTokenURI(0, JSON.stringify(pinataTokenUri))
+                await followerTwitterNft.setTokenURI(0, tokenUri)
                 let followerBalance = await followerTwitterNft.balanceOf(follower.address)
 
                 let nftTokenUri = await followerTwitterNft.tokenURI(0)
 
-                assert.equal(JSON.stringify(pinataTokenUri), nftTokenUri.toString())
+                assert.equal(tokenUri, nftTokenUri.toString())
+            })
+        })
+
+        describe("getter functions", function () {
+            beforeEach(async function () {
+                const deployFee = await ethers.utils.parseEther('0.001')
+                const transferable = true
+                const transferLimit = 2
+                const tweetId = 2221
+                const mintFee = await ethers.utils.parseEther('0.001')
+                const maxMintableAmount = 2
+
+                //Act
+                await contractOwnerTwitterNft.setCreatorShare(90)
+                await contractOwnerTwitterNft.setDeployFee(+deployFee)
+                await contentCreatorTwitterNft.deployNftParams(transferable,
+                    transferLimit,
+                    tweetId,
+                    +mintFee,
+                    maxMintableAmount
+                )
+                await followerTwitterNft.mintToken(
+                    2221,
+                    { value: mintFee }
+                )
+            })
+            it("tests global parameters", async function () {
+                const contentCreatorShare = await contractOwnerTwitterNft.getContentCreatorShareOfMintFee()
+                const tokenCounter = await contractOwnerTwitterNft.getTokenCounter()
+                const deployFee = await contractOwnerTwitterNft.getDeployFee()
+                const maxMintableAmount = await contractOwnerTwitterNft.getGlobalMaxMintableAmount()
+                // console.log(contentCreatorShare.toString())
+                expect(contentCreatorShare.toString()).to.equal("90")
+                expect(tokenCounter.toString())
+                    .to.equal("1")
+                expect(deployFee.toString())
+                    .to.equal(ethers.utils.parseEther('0.001').toString())
+                expect(maxMintableAmount.toString())
+                    .to.equal("150");
+            })
+
+            it("Checks all the tweet parameters", async function () {
+                const tweetId = 2221
+                const transferability = await contractOwnerTwitterNft.getTransferabilityOfToken(0)
+                const transferLimit = await contractOwnerTwitterNft.getTransferLimitOfToken(0)
+                const transferCounter = await contractOwnerTwitterNft.getTransferCounterOfToken(0)
+                const mintFee = await contractOwnerTwitterNft.getMintFeeByTweetId(tweetId)
+                let tokenIdsByTweetId = await contractOwnerTwitterNft.getTokenIdsByTweetId(tweetId)
+                tokenIdsByTweetId = tokenIdsByTweetId.map((element) => {
+                    return element.toString()
+                })
+                const isDeployed = await contractOwnerTwitterNft.getIfTweetIsDeployed(tweetId)
+                const follower = await contractOwnerTwitterNft.getFollowerByTweetIdAndTokenId(tweetId, 0)
+
+                expect(transferability.toString()).to.equal("true")
+                expect(transferLimit.toString()).to.equal("2")
+                expect(transferCounter.toString()).to.equal("0")
+                expect(mintFee.toString()).to.equal(ethers.utils.parseEther('0.001'))
+                expect(isDeployed.toString()).to.equal("true")
+                expect(follower.toString()).to.equal(follower)
             })
         })
     })
+
+//in getter funcs
+//test token array
+//test getAlltweetIdsWithContentCreator
